@@ -14,6 +14,7 @@ from langchain_community.document_loaders import (
     UnstructuredHTMLLoader,
     UnstructuredMarkdownLoader,
     UnstructuredURLLoader,
+    UnstructuredPowerPointLoader,
 )
 from langchain_unstructured import UnstructuredLoader
 
@@ -68,6 +69,8 @@ def get_doc_priority_and_type(path: Path) -> tuple[int, str]:
         return 1, "html"
     if ext in {".jpeg", ".jpg"}:
         return 1, "image"
+    if ext in {".pptx", ".ppt"}:
+        return 1, "presentation"
     if ext == ".md":
         return 2, "markdown"
     if ext == ".txt":
@@ -110,6 +113,11 @@ def _loader_candidates(path: Path) -> list[tuple[str, Callable[[], object]]]:
             ("UnstructuredMarkdownLoader", lambda: UnstructuredMarkdownLoader(str(path))),
             ("TextLoader(utf-8)", lambda: TextLoader(str(path), encoding="utf-8")),
             ("TextLoader(latin-1)", lambda: TextLoader(str(path), encoding="latin-1")),
+        ]
+    if ext in {".pptx", ".ppt"}:
+        return [
+            ("UnstructuredPPTLoader", lambda: UnstructuredPowerPointLoader(file_path=str(path))),
+            ("UnstructuredLoader", lambda: UnstructuredLoader(file_path=str(path))),
         ]
     if ext in PRIORITY_2_EXTENSIONS or ext in TEXT_FALLBACK_EXTENSIONS:
         return [
