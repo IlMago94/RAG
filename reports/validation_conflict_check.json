@@ -1,0 +1,23 @@
+{
+  "able_to_validate": true,
+  "conflicts_found": 1,
+  "conflicts": [
+    {
+      "issue": "CSP_VERSION_CONFLICT",
+      "severity": "CRITICAL",
+      "description": "Architecture uses both CSP 1.4 and CSP 2.0, which are explicitly NOT compatible on the same network infrastructure.",
+      "found_in_documents": {
+        "csp_1_4": [
+          "unknown"
+        ],
+        "csp_2_0": [
+          "unknown"
+        ],
+        "incompatibility_warning": [
+          "unknown"
+        ]
+      },
+      "recommendation": "Your architettura_avionica.txt specifies libcsp 1.4. Verify all nodes use CSP 1.4 OR migrate entirely to CSP 2.0 (not mixed)."
+    }
+  ]
+}

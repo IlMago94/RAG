@@ -1,0 +1,10 @@
+LibCSP (CubeSat Space Protocol) is a communication stack designed for embedded systems and satellites, especially CubeSats and small spacecraft.
+
+Main features:
+- Lightweight protocol, suitable for microcontrollers.
+- Supports CAN bus, UART, I2C, and TCP/IP.
+- Maximum supported number of nodes: 30.
+- Used for communication between avionics subsystems.
+- Provides routing, security, and packet handling.
+
+Note: The 30-node limit is intended to keep the network efficient and simple to manage in embedded environments.

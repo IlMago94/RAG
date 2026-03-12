@@ -1,0 +1,6 @@
+{
+  "cycle": 28,
+  "started_at_utc": "2026-03-10T09:02:08.218948+00:00",
+  "status": "error",
+  "error": "Storage folder /home/dani/Repo/test_rag/storage/qdrant is already accessed by another instance of Qdrant client. If you require concurrent access, use Qdrant server instead."
+}

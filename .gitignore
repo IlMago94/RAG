@@ -1,0 +1,9 @@
+.env
+__pycache__/
+*.pyc
+.venv/
+storage/
+.pytest_cache/
+data/doc
+data/quarantine/
+reports/

@@ -1,0 +1,18 @@
+Distributed avionics architecture
+
+The avionics platform is composed of:
+- 5 GNC/AOCS boards (Guidance, Navigation & Control / Attitude & Orbit Control System)
+- 5 DACT boards (Data Acquisition & Control)
+- 5 DPOD boards (Deployment & Payload Operations)
+- 10 PAYME boards (Payload Management & Experiment)
+- 5 PMU
+- 4 EPS 
+- 6 PDHT
+
+The boards are interconnected via CAN bus and use the CSP protocol for communication.
+Each board has a CSP identifier and can send/receive messages from other nodes.
+
+the libcsp version will be 1.4
+
+Connection example:
+GNC/AOCS boards send attitude data to DACT boards, which process it and forward it to DPOD and PAYME boards. All boards can exchange CSP messages over CAN, ensuring a robust and distributed network.

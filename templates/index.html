@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>RAG Web Starter</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="container">
+    <h2>Upload documents or folders</h2>
+    <form id="uploadForm" enctype="multipart/form-data">
+        <input type="file" name="files" multiple webkitdirectory directory>
+        <button type="submit">Upload</button>
+    </form>
+    <div id="uploadStatus"></div>
+    <hr>
+    <div class="file-list">
+        <h3>Uploaded documents</h3>
+        <ul id="fileList">
+        {% for file in files[:10] %}
+            <li>
+                <span>{{ file }}</span>
+                <button onclick="deleteFile('{{ file }}')">Delete</button>
+            </li>
+        {% endfor %}
+        </ul>
+        {% if files|length > 10 %}
+        <button id="showAllBtn" onclick="showAllFiles()">Show all</button>
+        {% endif %}
+    </div>
+    <button onclick="indexDocs()">Index all documents</button>
+    <div id="indexStatus"></div>
+    <div id="indexedStatus" style="margin:1em 0;font-weight:bold;">
+        {% if indexed %}
+            <span style="color:green;">✔ Documents indexed</span>
+        {% else %}
+            <span style="color:red;">✖ Documents not indexed</span>
+        {% endif %}
+    </div>
+    <div id="validationStatus" style="margin:1em 0;">
+        <h3>Validation</h3>
+        <div id="validationBox">
+            {% if validation and validation.able_to_validate %}
+                <div>Checks run: {{ validation.conflicts_found }}</div>
+                {% if validation.conflicts_found > 0 %}
+                    <div style="color:darkred;font-weight:bold;">Conflicts detected: {{ validation.conflicts_found }}</div>
+                {% else %}
+                    <div style="color:green;">No conflicts detected</div>
+                {% endif %}
+            {% else %}
+                <div>Validation unavailable</div>
+            {% endif %}
+        </div>
+        <button onclick="runValidation()">Run validation</button>
+    </div>
+    <div id="loadingIndicator" style="display:none;color:#0077cc;font-weight:bold;margin:1em 0;">
+        <span class="spinner"></span> Model is processing...
+    </div>
+    <hr>
+    <h2>Ask a question</h2>
+    <form id="queryForm">
+        <input type="text" name="question" placeholder="Write your question..." style="width:100%" required>
+        <button type="submit">Send</button>
+    </form>
+    <div class="answer" id="answerBox"></div>
+</div>
+<script>
+    document.getElementById('uploadForm').onsubmit = async function(e) {
+        e.preventDefault();
+        const formData = new FormData();
+        const input = this.querySelector('input[type=file]');
+        for (const file of input.files) {
+            formData.append('files', file);
+        }
+        const res = await fetch('/upload', { method: 'POST', body: formData });
+        const data = await res.json();
+        document.getElementById('uploadStatus').innerText = data.status + '\n' + (data.filenames ? data.filenames.join(', ') : '');
+        refreshFileList();
+    };
+
+    async function deleteFile(filename) {
+        if (!confirm('Do you want to delete ' + filename + '?')) return;
+        const res = await fetch('/delete?filename=' + encodeURIComponent(filename), { method: 'POST' });
+        const data = await res.json();
+        alert(data.status);
+        refreshFileList();
+    }
+
+    async function refreshFileList() {
+        const res = await fetch('/');
+        const html = await res.text();
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(html, 'text/html');
+        const newList = doc.getElementById('fileList');
+        document.getElementById('fileList').innerHTML = newList.innerHTML;
+        const showAllBtn = doc.getElementById('showAllBtn');
+        if (showAllBtn) {
+            if (!document.getElementById('showAllBtn')) {
+                document.getElementById('fileList').insertAdjacentElement('afterend', showAllBtn);
+            }
+        } else {
+            const btn = document.getElementById('showAllBtn');
+            if (btn) btn.remove();
+        }
+    }
+
+    function showAllFiles() {
+        const fileList = document.getElementById('fileList');
+        fileList.innerHTML = '';
+        {% for file in files %}
+        fileList.innerHTML += `<li><span>{{ file }}</span> <button onclick="deleteFile('{{ file }}')">Delete</button></li>`;
+        {% endfor %}
+        const btn = document.getElementById('showAllBtn');
+        if (btn) btn.remove();
+    }
+    function indexDocs() {
+        document.getElementById('indexStatus').innerText = '';
+        document.getElementById('loadingIndicator').style.display = 'block';
+        document.getElementById('indexedStatus').style.display = 'none';
+        fetch('/index', { method: 'POST' }).then(res => res.json()).then(data => {
+            document.getElementById('indexStatus').innerText = data.status;
+            document.getElementById('loadingIndicator').style.display = 'none';
+            refreshIndexedStatus();
+            document.getElementById('indexedStatus').style.display = 'block';
+        });
+    }
+
+    async function refreshIndexedStatus() {
+        const res = await fetch('/');
+        const html = await res.text();
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(html, 'text/html');
+        const newStatus = doc.getElementById('indexedStatus');
+        document.getElementById('indexedStatus').innerHTML = newStatus.innerHTML;
+    }
+    document.getElementById('queryForm').onsubmit = async function(e) {
+        e.preventDefault();
+        const formData = new FormData(this);
+        document.getElementById('answerBox').innerText = '';
+        document.getElementById('loadingIndicator').style.display = 'block';
+        const res = await fetch('/query', { method: 'POST', body: formData });
+        const data = await res.json();
+        document.getElementById('answerBox').innerText = data.answer;
+        document.getElementById('loadingIndicator').style.display = 'none';
+    };
+
+    async function runValidation() {
+        document.getElementById('validationBox').innerText = 'Running validation...';
+        const res = await fetch('/validate', { method: 'POST' });
+        const data = await res.json();
+        if (data.conflicts_found && data.conflicts_found > 0) {
+            document.getElementById('validationBox').innerText = 'Conflicts detected: ' + data.conflicts_found + '\n' + JSON.stringify(data.conflicts, null, 2);
+        } else if (data.able_to_validate === false) {
+            document.getElementById('validationBox').innerText = 'Validation unavailable';
+        } else {
+            document.getElementById('validationBox').innerText = 'No conflicts detected';
+        }
+    }
+</script>
+</body>
+</html>
