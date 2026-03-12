@@ -56,10 +56,19 @@ def validate_architecture_conflicts(settings: RagSettings) -> dict:
 
     try:
         collection_name = settings.collection_name
-        all_points, _ = client.scroll(
-            collection_name=collection_name,
-            limit=1000,
-        )
+
+        # Paginated scroll — no hard limit, fetches all points
+        all_points = []
+        offset = None
+        while True:
+            batch, offset = client.scroll(
+                collection_name=collection_name,
+                limit=1000,
+                offset=offset,
+            )
+            all_points.extend(batch)
+            if offset is None:
+                break
 
         csp14_sources: set = set()
         csp20_sources: set = set()

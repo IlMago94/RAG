@@ -3,8 +3,6 @@ from __future__ import annotations
 
 import os
 import shutil
-import sys
-from io import StringIO
 from pathlib import Path
 
 from fastapi import FastAPI, File, Form, Query, Request, UploadFile
@@ -17,6 +15,7 @@ from rag import (
     collection_exists,
     index_documents,
     ask_question,
+    invalidate_answer_cache,
     validate_architecture_conflicts,
 )
 
@@ -83,6 +82,7 @@ async def upload_files(files: list[UploadFile] = File(...)):
 def index():
     settings = RagSettings.from_env()
     index_documents(settings, rebuild=False)
+    invalidate_answer_cache()
     return {"status": "indexed"}
 
 
@@ -100,12 +100,7 @@ def validate():
 def query(question: str = Form(...)):
     settings = RagSettings.from_env()
     try:
-        old_stdout = sys.stdout
-        sys.stdout = mystdout = StringIO()
-        ask_question(settings, question, show_context=False)
-        sys.stdout = old_stdout
-        answer = mystdout.getvalue()
+        answer = ask_question(settings, question, show_context=False)
     except Exception as e:
-        sys.stdout = old_stdout
         answer = f"Error: {e}"
     return JSONResponse({"answer": answer})

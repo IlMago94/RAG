@@ -9,7 +9,7 @@ from .vectorstore import (
     collection_exists,
     index_documents,
 )
-from .retrieval import ask_question
+from .retrieval import ask_question, invalidate_answer_cache
 from .validation import validate_architecture_conflicts, run_retrieval_smoke_test
 from .autotune import run_autotune
 from .cli import main
@@ -28,6 +28,7 @@ __all__ = [
     "collection_exists",
     "index_documents",
     "ask_question",
+    "invalidate_answer_cache",
     "validate_architecture_conflicts",
     "run_retrieval_smoke_test",
     "run_autotune",
