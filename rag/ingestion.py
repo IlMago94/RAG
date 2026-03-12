@@ -3,12 +3,22 @@ from __future__ import annotations
 
 import concurrent.futures
 import shutil
+import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable, Iterable
+from typing import Callable, Iterable, Optional
 
 _DEFAULT_INGEST_WORKERS = 4
+
+
+def _render_progress_bar(done: int, total: int, current: str, width: int = 28) -> str:
+    """Build a single-line ASCII progress bar string."""
+    pct = done / total if total else 0
+    filled = int(width * pct)
+    bar = "=" * filled + (">" if filled < width else "") + " " * max(0, width - filled - 1)
+    name = Path(current).name[:38] if current else ""
+    return f"\r[{bar}] {done}/{total} ({pct:.0%})  {name:<38}"
 
 from langchain_core.documents import Document
 from langchain_community.document_loaders import (
@@ -216,6 +226,7 @@ def iter_documents(
     quarantine_dirname: str = "quarantine",
     max_workers: int = _DEFAULT_INGEST_WORKERS,
     files_filter: set[Path] | None = None,
+    progress_callback: Optional[Callable[[int, int, str], None]] = None,
 ) -> Iterable[Document]:
     """Iterate files with parallel parsing, autofix fallback, and quarantine.
 
@@ -225,6 +236,8 @@ def iter_documents(
         quarantine_dirname: Subdirectory name used for quarantined files.
         max_workers: Number of parallel parser threads (default 4).
         files_filter: If provided, only process files in this set.
+        progress_callback: Optional callable(processed, total, current_file).
+            If None, a progress bar is printed to stderr in CLI mode.
     """
     if not data_dir.exists():
         raise FileNotFoundError(
@@ -239,6 +252,14 @@ def iter_documents(
     ]
 
     # Submit all files to the thread pool; preserve sorted order via ordered futures list.
+    total = len(file_paths)
+    done = 0
+    use_cli_bar = progress_callback is None and sys.stderr.isatty()
+
+    if use_cli_bar and total:
+        sys.stderr.write(_render_progress_bar(0, total, ""))
+        sys.stderr.flush()
+
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = [
             (path, executor.submit(_parse_single_file, path, data_dir))
@@ -250,6 +271,13 @@ def iter_documents(
                 docs, parser_used, errors = future.result()
             except Exception as exc:
                 docs, parser_used, errors = [], "unknown", [str(exc)]
+
+            done += 1
+            if progress_callback is not None:
+                progress_callback(done, total, str(path))
+            elif use_cli_bar:
+                sys.stderr.write(_render_progress_bar(done, total, str(path)))
+                sys.stderr.flush()
 
             if not docs:
                 print(f"[WARN] Failed parsing {path}: {' | '.join(errors)}")
@@ -276,6 +304,10 @@ def iter_documents(
                 report.register_parser(parser_used)
 
             yield from docs
+
+    if use_cli_bar and total:
+        sys.stderr.write("\n")
+        sys.stderr.flush()
 
     # Support for web URLs
     url_file = data_dir / "urls.txt"

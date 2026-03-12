@@ -6,6 +6,7 @@ import json
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Callable, Optional
 
 from langchain_core.documents import Document
 from langchain_qdrant import QdrantVectorStore
@@ -120,7 +121,11 @@ def _delete_chunks_by_source(client: QdrantClient, collection_name: str, relativ
 # Indexing orchestration
 # ---------------------------------------------------------------------------
 
-def index_documents(settings: RagSettings, rebuild: bool) -> IngestionReport:
+def index_documents(
+    settings: RagSettings,
+    rebuild: bool,
+    progress_callback: Optional[Callable[[int, int, str], None]] = None,
+) -> IngestionReport:
     """Index documents with autofix parsing and hybrid storage strategy.
 
     In incremental mode (rebuild=False) files that have not changed since the
@@ -195,6 +200,7 @@ def index_documents(settings: RagSettings, rebuild: bool) -> IngestionReport:
             report=report,
             quarantine_dirname=settings.quarantine_dirname,
             files_filter=set(files_to_process) if incremental else None,
+            progress_callback=progress_callback,
         )
     )
 

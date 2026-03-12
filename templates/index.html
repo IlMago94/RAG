@@ -30,6 +30,17 @@
     </div>
     <button onclick="indexDocs()">Index all documents</button>
     <div id="indexStatus"></div>
+    <div id="progressContainer" style="display:none;margin:1em 0;">
+        <div style="font-size:0.9em;color:#555;margin-bottom:4px;">
+            <span id="progressLabel">Preparing...</span>
+        </div>
+        <div class="progress-bar-container">
+            <div class="progress-bar-fill" id="progressFill" style="width:0%"></div>
+        </div>
+        <div style="font-size:0.82em;color:#888;margin-top:3px;">
+            <span id="progressCurrent"></span>
+        </div>
+    </div>
     <div id="indexedStatus" style="margin:1em 0;font-weight:bold;">
         {% if indexed %}
             <span style="color:green;">✔ Documents indexed</span>
@@ -115,13 +126,41 @@
     }
     function indexDocs() {
         document.getElementById('indexStatus').innerText = '';
-        document.getElementById('loadingIndicator').style.display = 'block';
+        document.getElementById('loadingIndicator').style.display = 'none';
         document.getElementById('indexedStatus').style.display = 'none';
-        fetch('/index', { method: 'POST' }).then(res => res.json()).then(data => {
-            document.getElementById('indexStatus').innerText = data.status;
-            document.getElementById('loadingIndicator').style.display = 'none';
-            refreshIndexedStatus();
-            document.getElementById('indexedStatus').style.display = 'block';
+        document.getElementById('progressContainer').style.display = 'block';
+        document.getElementById('progressFill').style.width = '0%';
+        document.getElementById('progressLabel').innerText = 'Starting...';
+        document.getElementById('progressCurrent').innerText = '';
+
+        fetch('/index', { method: 'POST' }).then(() => {
+            const poll = setInterval(async () => {
+                const res = await fetch('/progress');
+                const p = await res.json();
+
+                const total = p.total || 0;
+                const done = p.processed || 0;
+                const pct = total > 0 ? Math.round(done / total * 100) : 0;
+
+                document.getElementById('progressFill').style.width = pct + '%';
+                document.getElementById('progressLabel').innerText =
+                    total > 0
+                        ? `${done} / ${total} file (${pct}%)`
+                        : (p.done ? 'Done' : 'Preparing...');
+                const cur = p.current ? p.current.split('/').pop().split('\\').pop() : '';
+                document.getElementById('progressCurrent').innerText = cur;
+
+                if (p.done) {
+                    clearInterval(poll);
+                    document.getElementById('progressFill').style.width = '100%';
+                    document.getElementById('progressLabel').innerText =
+                        p.error ? '\u274c Error: ' + p.error : `\u2714 Completed: ${done} file indexed`;
+                    document.getElementById('progressCurrent').innerText = '';
+                    document.getElementById('indexStatus').innerText = p.error ? '' : '';
+                    refreshIndexedStatus();
+                    document.getElementById('indexedStatus').style.display = 'block';
+                }
+            }, 400);
         });
     }
 

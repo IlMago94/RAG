@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import threading
 from pathlib import Path
 
 from fastapi import FastAPI, File, Form, Query, Request, UploadFile
@@ -27,6 +28,18 @@ templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
 UPLOAD_DIR = BASE_DIR / "data"
 UPLOAD_DIR.mkdir(exist_ok=True)
+
+# ---------------------------------------------------------------------------
+# Global indexing progress state
+# ---------------------------------------------------------------------------
+_index_lock = threading.Lock()
+_index_progress: dict = {
+    "total": 0,
+    "processed": 0,
+    "current": "",
+    "done": True,
+    "error": "",
+}
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -80,10 +93,34 @@ async def upload_files(files: list[UploadFile] = File(...)):
 
 @app.post("/index")
 def index():
-    settings = RagSettings.from_env()
-    index_documents(settings, rebuild=False)
-    invalidate_answer_cache()
-    return {"status": "indexed"}
+    def _run():
+        def _cb(processed: int, total: int, current_file: str) -> None:
+            with _index_lock:
+                _index_progress["processed"] = processed
+                _index_progress["total"] = total
+                _index_progress["current"] = current_file
+
+        with _index_lock:
+            _index_progress.update({"total": 0, "processed": 0, "current": "", "done": False, "error": ""})
+        try:
+            settings = RagSettings.from_env()
+            index_documents(settings, rebuild=False, progress_callback=_cb)
+            invalidate_answer_cache()
+        except Exception as exc:
+            with _index_lock:
+                _index_progress["error"] = str(exc)
+        finally:
+            with _index_lock:
+                _index_progress["done"] = True
+
+    threading.Thread(target=_run, daemon=True).start()
+    return {"status": "started"}
+
+
+@app.get("/progress")
+def progress():
+    with _index_lock:
+        return JSONResponse(dict(_index_progress))
 
 
 @app.post("/validate")
