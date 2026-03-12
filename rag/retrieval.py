@@ -21,7 +21,7 @@ from .validation import validate_architecture_conflicts
 
 try:
     from sentence_transformers import CrossEncoder as _CE
-    _cross_encoder = _CE("cross-encoder/ms-marco-MiniLM-L-6-v2")
+    _cross_encoder = _CE("cross-encoder/mmarco-mMiniLMv2-L12-H384-v1")
 except Exception:
     _cross_encoder = None
 
@@ -123,14 +123,28 @@ def _expand_context_window(
     return docs + extra
 
 
+def _generate_sub_queries(question: str) -> list[str]:
+    """Break the original question into complementary sub-queries.
+
+    Extracts key noun-phrases / technical terms and builds focused
+    queries so the retrieval covers different angles of the topic.
+    """
+    words = question.split()
+    sub_queries = [question]
+    # Pick meaningful keyword windows (3-grams) as additional probes
+    if len(words) >= 6:
+        mid = len(words) // 2
+        sub_queries.append(" ".join(words[:mid]))
+        sub_queries.append(" ".join(words[mid:]))
+    if len(words) >= 9:
+        third = len(words) // 3
+        sub_queries.append(" ".join(words[third : 2 * third]))
+    return sub_queries
+
+
 def _multi_query_retrieval(vector_store: QdrantVectorStore, question: str, k: int) -> list[Document]:
-    """Retrieve docs using the original query PLUS targeted sub-queries to maximize coverage."""
-    sub_queries = [
-        question,
-        "avionics architecture boards CSP version",
-        "CSP version 1 version 2 compatibility network",
-        "libcsp protocol version CAN bus",
-    ]
+    """Retrieve docs using the original query PLUS auto-generated sub-queries to maximize coverage."""
+    sub_queries = _generate_sub_queries(question)
     seen_contents: set[str] = set()
     merged: list[Document] = []
     per_query_k = max(k // len(sub_queries), 4)
