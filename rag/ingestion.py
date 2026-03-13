@@ -1,11 +1,24 @@
 """Document ingestion: loading, parsing with autofix fallback, and quarantine."""
 from __future__ import annotations
 
+import concurrent.futures
 import shutil
+import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable, Iterable
+from typing import Callable, Iterable, Optional
+
+_DEFAULT_INGEST_WORKERS = 8
+
+
+def _render_progress_bar(done: int, total: int, current: str, width: int = 28) -> str:
+    """Build a single-line ASCII progress bar string."""
+    pct = done / total if total else 0
+    filled = int(width * pct)
+    bar = "=" * filled + (">" if filled < width else "") + " " * max(0, width - filled - 1)
+    name = Path(current).name[:38] if current else ""
+    return f"\r[{bar}] {done}/{total} ({pct:.0%})  {name:<38}"
 
 from langchain_core.documents import Document
 from langchain_community.document_loaders import (
@@ -14,6 +27,7 @@ from langchain_community.document_loaders import (
     UnstructuredHTMLLoader,
     UnstructuredMarkdownLoader,
     UnstructuredURLLoader,
+    UnstructuredPowerPointLoader,
 )
 from langchain_unstructured import UnstructuredLoader
 
@@ -68,6 +82,8 @@ def get_doc_priority_and_type(path: Path) -> tuple[int, str]:
         return 1, "html"
     if ext in {".jpeg", ".jpg"}:
         return 1, "image"
+    if ext in {".pptx", ".ppt"}:
+        return 1, "presentation"
     if ext == ".md":
         return 2, "markdown"
     if ext == ".txt":
@@ -111,6 +127,11 @@ def _loader_candidates(path: Path) -> list[tuple[str, Callable[[], object]]]:
             ("TextLoader(utf-8)", lambda: TextLoader(str(path), encoding="utf-8")),
             ("TextLoader(latin-1)", lambda: TextLoader(str(path), encoding="latin-1")),
         ]
+    if ext in {".pptx", ".ppt"}:
+        return [
+            ("UnstructuredPPTLoader", lambda: UnstructuredPowerPointLoader(file_path=str(path))),
+            ("UnstructuredLoader", lambda: UnstructuredLoader(file_path=str(path))),
+        ]
     if ext in PRIORITY_2_EXTENSIONS or ext in TEXT_FALLBACK_EXTENSIONS:
         return [
             ("TextLoader(utf-8)", lambda: TextLoader(str(path), encoding="utf-8")),
@@ -150,77 +171,143 @@ def _send_to_quarantine(path: Path, data_dir: Path, quarantine_dirname: str) -> 
 
 
 # ---------------------------------------------------------------------------
+# Single-file parser (used by parallel ingestion)
+# ---------------------------------------------------------------------------
+
+def _parse_single_file(
+    path: Path,
+    data_dir: Path,
+) -> tuple[list[Document], str, list[str]]:
+    """Parse one file through the autofix fallback chain.
+
+    Returns (docs_with_metadata, parser_used, errors).
+    Caller is responsible for quarantine and report updates.
+    """
+    priority, doc_type = get_doc_priority_and_type(path)
+    candidates = _loader_candidates(path)
+    docs: list[Document] = []
+    parser_used = "unknown"
+    errors: list[str] = []
+
+    for parser_name, factory in candidates:
+        try:
+            loader = factory()
+            loaded = loader.load()
+            cleaned = _sanitize_loaded_docs(loaded)
+            if not cleaned:
+                errors.append(f"{parser_name}: empty content")
+                continue
+            parser_used = parser_name
+            docs = cleaned
+            break
+        except Exception as exc:
+            errors.append(f"{parser_name}: {exc}")
+
+    for index, doc in enumerate(docs, start=1):
+        doc.metadata["source"] = str(path.relative_to(data_dir))
+        doc.metadata["doc_type"] = doc_type
+        doc.metadata["priority"] = priority
+        doc.metadata["extension"] = path.suffix.lower()
+        doc.metadata["parser_used"] = parser_used
+        doc.metadata["source_path"] = str(path)
+        doc.metadata["doc_part"] = index
+        doc.metadata["ingested_at_utc"] = datetime.now(timezone.utc).isoformat()
+
+    return docs, parser_used, errors
+
+
+# ---------------------------------------------------------------------------
 # Main iteration
 # ---------------------------------------------------------------------------
 
-def iter_documents(data_dir: Path, report: IngestionReport | None = None, quarantine_dirname: str = "quarantine") -> Iterable[Document]:
-    """Iterate files with parser autofix and quarantine on unrecoverable parsing issues."""
+def iter_documents(
+    data_dir: Path,
+    report: IngestionReport | None = None,
+    quarantine_dirname: str = "quarantine",
+    max_workers: int = _DEFAULT_INGEST_WORKERS,
+    files_filter: set[Path] | None = None,
+    progress_callback: Optional[Callable[[int, int, str], None]] = None,
+) -> Iterable[Document]:
+    """Iterate files with parallel parsing, autofix fallback, and quarantine.
+
+    Args:
+        data_dir: Root directory containing documents.
+        report: Optional report accumulator.
+        quarantine_dirname: Subdirectory name used for quarantined files.
+        max_workers: Number of parallel parser threads (default 4).
+        files_filter: If provided, only process files in this set.
+        progress_callback: Optional callable(processed, total, current_file).
+            If None, a progress bar is printed to stderr in CLI mode.
+    """
     if not data_dir.exists():
         raise FileNotFoundError(
             f"Data directory not found: {data_dir}. Create it and add your documents first."
         )
 
-    for path in sorted(data_dir.rglob("*")):
-        if not path.is_file():
-            continue
-        if quarantine_dirname in path.parts:
-            continue
+    file_paths = [
+        p for p in sorted(data_dir.rglob("*"))
+        if p.is_file()
+        and quarantine_dirname not in p.parts
+        and (files_filter is None or p in files_filter)
+    ]
 
-        priority, doc_type = get_doc_priority_and_type(path)
-        candidates = _loader_candidates(path)
-        docs: list[Document] = []
-        parser_used = "unknown"
-        errors: list[str] = []
+    # Submit all files to the thread pool; preserve sorted order via ordered futures list.
+    total = len(file_paths)
+    done = 0
+    use_cli_bar = progress_callback is None and sys.stderr.isatty()
 
-        for parser_name, factory in candidates:
+    if use_cli_bar and total:
+        sys.stderr.write(_render_progress_bar(0, total, ""))
+        sys.stderr.flush()
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = [
+            (path, executor.submit(_parse_single_file, path, data_dir))
+            for path in file_paths
+        ]
+
+        for path, future in futures:
             try:
-                loader = factory()
-                loaded = loader.load()
-                cleaned = _sanitize_loaded_docs(loaded)
-                if not cleaned:
-                    errors.append(f"{parser_name}: empty content")
-                    continue
-                parser_used = parser_name
-                docs = cleaned
-                if report:
-                    report.register_parser(parser_name)
-                break
+                docs, parser_used, errors = future.result()
             except Exception as exc:
-                errors.append(f"{parser_name}: {exc}")
+                docs, parser_used, errors = [], "unknown", [str(exc)]
 
-        if not docs:
-            print(f"[WARN] Failed parsing {path}: {' | '.join(errors)}")
-            if report:
-                report.failed_files += 1
-                report.failures.append(
-                    {
-                        "file": str(path.relative_to(data_dir)),
-                        "reason": "all parsers failed",
-                        "errors": " | ".join(errors),
-                    }
-                )
-            try:
-                quarantined_to = _send_to_quarantine(path, data_dir, quarantine_dirname)
+            done += 1
+            if progress_callback is not None:
+                progress_callback(done, total, str(path))
+            elif use_cli_bar:
+                sys.stderr.write(_render_progress_bar(done, total, str(path)))
+                sys.stderr.flush()
+
+            if not docs:
+                print(f"[WARN] Failed parsing {path}: {' | '.join(errors)}")
                 if report:
-                    report.quarantined_files += 1
-                print(f"[INFO] Quarantined {path} -> {quarantined_to}")
-            except Exception as quarantine_error:
-                print(f"[WARN] Quarantine failed for {path}: {quarantine_error}")
-            continue
+                    report.failed_files += 1
+                    report.failures.append(
+                        {
+                            "file": str(path.relative_to(data_dir)),
+                            "reason": "all parsers failed",
+                            "errors": " | ".join(errors),
+                        }
+                    )
+                try:
+                    quarantined_to = _send_to_quarantine(path, data_dir, quarantine_dirname)
+                    if report:
+                        report.quarantined_files += 1
+                    print(f"[INFO] Quarantined {path} -> {quarantined_to}")
+                except Exception as quarantine_error:
+                    print(f"[WARN] Quarantine failed for {path}: {quarantine_error}")
+                continue
 
-        if report:
-            report.indexed_files += 1
+            if report:
+                report.indexed_files += 1
+                report.register_parser(parser_used)
 
-        for index, doc in enumerate(docs, start=1):
-            doc.metadata["source"] = str(path.relative_to(data_dir))
-            doc.metadata["doc_type"] = doc_type
-            doc.metadata["priority"] = priority
-            doc.metadata["extension"] = path.suffix.lower()
-            doc.metadata["parser_used"] = parser_used
-            doc.metadata["source_path"] = str(path)
-            doc.metadata["doc_part"] = index
-            doc.metadata["ingested_at_utc"] = datetime.now(timezone.utc).isoformat()
-            yield doc
+            yield from docs
+
+    if use_cli_bar and total:
+        sys.stderr.write("\n")
+        sys.stderr.flush()
 
     # Support for web URLs
     url_file = data_dir / "urls.txt"

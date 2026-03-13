@@ -20,11 +20,25 @@ def chunk_documents(documents: list[Document], settings: RagSettings) -> list[Do
             chunk_size, chunk_overlap = settings.chunk_size, settings.chunk_overlap
         grouped.setdefault((chunk_size, chunk_overlap), []).append(doc)
 
+    # Separators ordered from strongest to weakest boundary so the
+    # splitter prefers cutting at paragraph/sentence boundaries first.
+    _SEPARATORS = [
+        "\n\n",   # paragraph break
+        "\n",     # line break
+        ". ",     # end of sentence
+        "; ",     # semicolon clause
+        ", ",     # comma clause
+        " ",      # word boundary
+        "",       # character (last resort)
+    ]
+
     chunks: list[Document] = []
     for (chunk_size, chunk_overlap), docs_group in grouped.items():
         splitter = RecursiveCharacterTextSplitter(
             chunk_size=chunk_size,
             chunk_overlap=chunk_overlap,
+            separators=_SEPARATORS,
+            keep_separator=True,
         )
         chunks.extend(splitter.split_documents(docs_group))
 

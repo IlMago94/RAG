@@ -5,6 +5,8 @@ Local RAG proof of concept with:
 - Ollama or LocalAI as LLM
 - Qdrant local mode as persistent vector store
 - LangChain as orchestration layer
+- Cross-encoder re-ranking for retrieval precision
+- Incremental indexing (only re-embeds changed files)
 - CLI (`test_rag.py`) + Web UI (`web_server.py`)
 
 ## Requirements
@@ -22,19 +24,19 @@ python3 -m venv .venv
 source .venv/bin/activate
 ```
 
-1. Install base dependencies:
+2. Install dependencies:
 
 ```bash
 pip install -r requirements.txt
 ```
 
-1. Create local configuration:
+3. Create local configuration:
 
 ```bash
 cp .env.example .env
 ```
 
-1. Put your documents in `data/`.
+4. Put your documents in `data/`.
 
 ## `.env` configuration
 
@@ -44,8 +46,9 @@ Ollama example:
 RAG_LLM_PROVIDER=ollama
 RAG_EMBED_PROVIDER=ollama
 OLLAMA_BASE_URL=http://localhost:11434
-RAG_CHAT_MODEL=qwen3:8b
-RAG_EMBED_MODEL=qwen3-embedding:4b
+RAG_CHAT_MODEL=glm-4.7-flash:latest
+RAG_EMBED_MODEL=bge-m3:latest
+RAG_TOP_K=8
 ```
 
 LocalAI example (OpenAI-compatible):
@@ -123,10 +126,13 @@ From the UI you can:
 
 ## Supported formats
 
-- Priority 1: `.pdf`, `.docx`, `.doc`, `.html`, `.htm`, `.jpeg`, `.jpg`
-- Priority 2: `.md`, `.txt`, `.json`, `.xml`, `.log`
-- Priority 3: all other formats (automatic fallback)
-- Web URLs from `data/urls.txt` (one URL per line)
+| Priority | Extensions | Strategy |
+|----------|------------|----------|
+| 1 (high-fidelity) | `.pdf`, `.docx`, `.doc`, `.html`, `.htm`, `.jpeg`, `.jpg`, `.pptx`, `.ppt` | Dedicated parsers with autofix fallback |
+| 2 (structured) | `.md`, `.txt`, `.json`, `.xml`, `.log` | Text/Markdown loaders |
+| 3 (fallback) | `.csv`, `.py`, `.rst`, `.yaml`, `.yml`, `.text`, all others | TextLoader or UnstructuredLoader fallback |
+| Web URLs | `data/urls.txt` (one URL per line) | UnstructuredURLLoader |
+
 - Each file gets metadata (`doc_type`, `priority`, `extension`, `parser_used`, `source`)
 - Hybrid indexing: main collection + separate collections by document type
 
@@ -154,7 +160,27 @@ Main reports:
 
 - `test_rag.py`: CLI RAG pipeline (config, indexing, ask)
 - `web_server.py`: FastAPI API + UI integration
+- `rag/`: core pipeline package
+  - `config.py`: settings, provider builders, supported formats
+  - `ingestion.py`: parallel document loading with autofix fallback and quarantine
+  - `chunking.py`: type-aware splitting with sentence-boundary separators
+  - `vectorstore.py`: Qdrant indexing with incremental SHA-256 manifest
+  - `retrieval.py`: question answering with cross-encoder re-ranking, context window, cache
+  - `validation.py`: architecture conflict detection and retrieval smoke tests
+  - `autotune.py`: autonomous index + validation cycles
+  - `cli.py`: CLI argument parsing
 - `templates/index.html`: web page
 - `static/style.css`: style
 - `data/`: source documents
 - `storage/`: local Qdrant persistence
+
+## Quality features
+
+- **Incremental indexing**: SHA-256 file manifest; only new/modified files are re-embedded.
+- **Parallel ingestion**: files parsed concurrently via `ThreadPoolExecutor`.
+- **Sentence-aware chunking**: separators tuned to split at paragraph, line, and sentence boundaries.
+- **Cross-encoder re-ranking**: `mmarco-mMiniLMv2-L12-H384-v1` (multilingual) re-orders retrieved chunks by semantic relevance. Falls back gracefully if `sentence-transformers` is not installed.
+- **Context window**: retrieves neighbour chunks (±1) from the same source for broader passage context.
+- **Answer cache**: in-memory FIFO cache (max 128 entries), automatically invalidated after re-indexing.
+- **Multi-query retrieval**: conflict queries auto-generate sub-queries for better coverage.
+- **Paginated validation**: architecture conflict scan scrolls through all indexed points (no hard limit).

@@ -7,6 +7,11 @@ import warnings
 from dataclasses import dataclass
 from pathlib import Path
 
+# Load .env early so HF_HUB_OFFLINE (and similar) are set before any
+# huggingface_hub / sentence-transformers import happens at module level.
+from dotenv import load_dotenv as _load_dotenv
+_load_dotenv()
+
 warnings.filterwarnings(
     "ignore",
     message="Core Pydantic V1 functionality isn't compatible with Python 3.14 or greater.",
@@ -23,7 +28,7 @@ from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 # ---------------------------------------------------------------------------
 
 # Extensions with high-fidelity dedicated parsers (PDF, Office, HTML, images).
-PRIORITY_1_EXTENSIONS = {".pdf", ".docx", ".doc", ".html", ".htm", ".jpeg", ".jpg"}
+PRIORITY_1_EXTENSIONS = {".pdf", ".docx", ".doc", ".html", ".htm", ".jpeg", ".jpg", ".pptx", ".ppt"}
 
 # Plain-text and structured formats reliably loaded with simple loaders.
 PRIORITY_2_EXTENSIONS = {".md", ".txt", ".json", ".xml", ".log"}
