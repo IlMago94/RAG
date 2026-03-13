@@ -1,5 +1,5 @@
 {
-  "timestamp_utc": "2026-03-10T08:55:07.855119+00:00",
+  "timestamp_utc": "2026-03-13T15:09:42.199391+00:00",
   "collection": "local-rag",
   "supported_formats": {
     "priority_1": [
@@ -9,7 +9,9 @@
       ".html",
       ".jpeg",
       ".jpg",
-      ".pdf"
+      ".pdf",
+      ".ppt",
+      ".pptx"
     ],
     "priority_2": [
       ".json",
@@ -21,15 +23,14 @@
     "priority_3": "all other file extensions"
   },
   "ingestion": {
-    "indexed_files": 27,
+    "indexed_files": 32,
     "failed_files": 0,
-    "total_docs": 55,
-    "total_chunks": 116,
+    "total_docs": 977,
+    "total_chunks": 989,
     "quarantined_files": 0,
     "parser_usage": {
-      "TextLoader(utf-8)": 25,
-      "PDFPlumberLoader": 1,
-      "UnstructuredLoader": 1
+      "TextLoader(utf-8)": 2,
+      "PDFPlumberLoader": 30
     },
     "failures": [],
     "anomalies": []

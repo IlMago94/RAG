@@ -11,7 +11,7 @@ from typing import Callable, Optional
 from langchain_core.documents import Document
 from langchain_qdrant import QdrantVectorStore
 from qdrant_client import QdrantClient
-from qdrant_client.models import FieldCondition, Filter, MatchValue
+from qdrant_client.models import FieldCondition, Filter, MatchValue, PointStruct
 
 from .config import RagSettings, SUPPORTED_SUMMARY, build_embeddings, write_report
 from .ingestion import IngestionReport, iter_documents
@@ -31,7 +31,12 @@ def build_client(settings: RagSettings) -> QdrantClient:
 def collection_exists(settings: RagSettings) -> bool:
     """Check if the vector collection exists in Qdrant storage."""
     client = build_client(settings)
-    return client.collection_exists(settings.collection_name)
+    try:
+        return client.collection_exists(settings.collection_name)
+    finally:
+        close_fn = getattr(client, "close", None)
+        if callable(close_fn):
+            close_fn()
 
 
 def build_vector_store(settings: RagSettings) -> QdrantVectorStore:
@@ -115,6 +120,51 @@ def _delete_chunks_by_source(client: QdrantClient, collection_name: str, relativ
         )
     except Exception:
         pass
+
+
+def _copy_points_by_doctype(
+    client: QdrantClient,
+    src_collection: str,
+    dst_collection: str,
+    doc_type: str,
+) -> int:
+    """Copy points matching doc_type from src to dst without re-embedding.
+
+    Reads the already-computed vectors via scroll() and writes them directly
+    into the destination collection with upsert(). Zero embedding calls.
+    Returns the number of points copied.
+    """
+    collection_info = client.get_collection(src_collection)
+    vectors_config = collection_info.config.params.vectors
+
+    if client.collection_exists(dst_collection):
+        client.delete_collection(dst_collection)
+    client.create_collection(collection_name=dst_collection, vectors_config=vectors_config)
+
+    offset = None
+    total = 0
+    while True:
+        records, next_offset = client.scroll(
+            collection_name=src_collection,
+            scroll_filter=Filter(
+                must=[FieldCondition(key="metadata.doc_type", match=MatchValue(value=doc_type))]
+            ),
+            with_vectors=True,
+            with_payload=True,
+            limit=256,
+            offset=offset,
+        )
+        if not records:
+            break
+        client.upsert(
+            collection_name=dst_collection,
+            points=[PointStruct(id=r.id, vector=r.vector, payload=r.payload) for r in records],
+        )
+        total += len(records)
+        if next_offset is None:
+            break
+        offset = next_offset
+    return total
 
 
 # ---------------------------------------------------------------------------
@@ -241,20 +291,25 @@ def index_documents(
         )
 
     # ----- Phase 5: per-type hybrid collections (full rebuild only) -----
+    # Vectors are already computed in Phase 4 — copy them via scroll+upsert,
+    # no calls to the embedding model.
     if not incremental:
         type_groups: dict[str, list[Document]] = {}
         for chunk in chunks:
             type_groups.setdefault(chunk.metadata.get("doc_type", "generic"), []).append(chunk)
 
-        for doc_type, type_chunks in sorted(type_groups.items()):
-            type_collection = f"{settings.collection_name}-{doc_type}"
-            cleanup_collections(settings, [type_collection])
-            QdrantVectorStore.from_documents(
-                documents=type_chunks,
-                embedding=embeddings,
-                path=str(settings.persist_dir),
-                collection_name=type_collection,
-            )
+        client = build_client(settings)
+        try:
+            for doc_type in sorted(type_groups.keys()):
+                type_collection = f"{settings.collection_name}-{doc_type}"
+                count = _copy_points_by_doctype(
+                    client, settings.collection_name, type_collection, doc_type
+                )
+                print(f"[INFO] {type_collection}: copied {count} points (no re-embedding)")
+        finally:
+            close_fn = getattr(client, "close", None)
+            if callable(close_fn):
+                close_fn()
 
     # ----- Phase 6: report & manifest -----
     if report.failed_files > 0:

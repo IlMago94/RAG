@@ -71,15 +71,23 @@ def _expand_context_window(
     docs: list[Document],
     settings: RagSettings,
     window: int = 1,
+    client=None,
 ) -> list[Document]:
     """For each retrieved chunk, try to fetch its immediate neighbours (±window)
     from Qdrant so the LLM sees a broader passage.
     Neighbour chunks are appended after the original list and deduplicated.
+    Pass an already-open QdrantClient via `client` to avoid opening a second
+    concurrent connection on the same local storage path.
     """
     if not docs:
         return docs
 
-    client = build_client(settings)
+    # Reuse the caller's client when provided to avoid a second lock on the
+    # same local Qdrant storage directory.
+    own_client = client is None
+    if own_client:
+        client = build_client(settings)
+
     seen_ids: set[int] = {d.metadata.get("chunk_id") for d in docs if "chunk_id" in d.metadata}
     extra: list[Document] = []
 
@@ -116,9 +124,10 @@ def _expand_context_window(
     except Exception:
         pass
     finally:
-        close_fn = getattr(client, "close", None)
-        if callable(close_fn):
-            close_fn()
+        if own_client:
+            close_fn = getattr(client, "close", None)
+            if callable(close_fn):
+                close_fn()
 
     return docs + extra
 
@@ -191,7 +200,7 @@ def ask_question(settings: RagSettings, question: str, show_context: bool) -> st
         documents = retriever.invoke(question)
         # Re-rank and apply context window only for non-conflict mode
         documents = _rerank(documents, question, settings.top_k)
-        documents = _expand_context_window(documents, settings)
+        documents = _expand_context_window(documents, settings, client=vector_store.client)
 
     if not documents:
         print("No relevant context found for the question.")

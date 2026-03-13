@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Iterable, Optional
 
-_DEFAULT_INGEST_WORKERS = 4
+_DEFAULT_INGEST_WORKERS = 8
 
 
 def _render_progress_bar(done: int, total: int, current: str, width: int = 28) -> str:
